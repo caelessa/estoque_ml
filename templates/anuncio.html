@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Composição do anúncio</h3>
+<div class="card p-3 mb-3">
+  <div><strong>{{ anuncio.codigo_anuncio_ml }}</strong> — {{ anuncio.titulo }}</div>
+  <div class="small-muted">SKU: {{ anuncio.sku_anuncio }} | Entrega: {{ anuncio.forma_entrega }} | Status: {{ anuncio.status }}</div>
+</div>
+<div class="card p-3 mb-3">
+  <h5>Itens do kit/anúncio</h5>
+  <table class="table table-sm">
+    <thead><tr><th>Produto</th><th>Estoque atual</th><th>Qtd. baixa por venda</th><th></th></tr></thead>
+    <tbody>
+    {% for c in comps %}
+      <tr><td><strong>{{ c.codigo }}</strong> — {{ c.descricao }}</td><td>{{ c.quantidade }}</td><td>{{ c.quantidade_por_venda }}</td><td class="text-end"><form method="post" action="{{ url_for('excluir_composicao', comp_id=c.id) }}" onsubmit="return confirm('Remover item da composição?')"><button class="btn btn-sm btn-outline-danger">Remover</button></form></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card p-3">
+  <h5>Adicionar/alterar item</h5>
+  <form method="post" action="{{ url_for('add_composicao', anuncio_id=anuncio.id) }}" class="row g-2">
+    <div class="col-md-8"><select name="produto_id" class="form-select" required>{% for p in produtos %}<option value="{{ p.id }}">{{ p.codigo }} — {{ p.descricao }}</option>{% endfor %}</select></div>
+    <div class="col-md-2"><input name="quantidade_por_venda" type="number" step="0.001" class="form-control" value="1"></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary">Salvar</button></div>
+  </form>
+</div>
+{% endblock %}

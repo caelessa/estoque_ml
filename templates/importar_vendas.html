@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Importar relatório de vendas Mercado Livre</h3>
+<div class="alert alert-warning">Vendas com <strong>Forma de entrega = Mercado Envios Full</strong> não baixam estoque neste sistema, porque a baixa deve ocorrer quando a mercadoria é enviada ao Full.</div>
+<div class="card p-3">
+  <form method="post" enctype="multipart/form-data">
+    <input type="file" name="arquivo" class="form-control mb-3" accept=".xlsx,.xls" required>
+    <button class="btn btn-primary">Importar vendas</button>
+  </form>
+</div>
+{% if resultado %}
+<div class="card p-3 mt-3">
+  <h5>Resultado da importação</h5>
+  <ul>
+    <li>Aba lida: {{ resultado.sheet }}</li>
+    <li>Cabeçalho detectado na linha: {{ resultado.header }}</li>
+    <li>Linhas no relatório: {{ resultado.total }}</li>
+    <li>Vendas processadas com baixa: {{ resultado.processadas }}</li>
+    <li>Vendas Full ignoradas: {{ resultado.full_ignoradas }}</li>
+    <li>Vendas pendentes: {{ resultado.pendentes }}</li>
+    <li>Duplicadas ignoradas: {{ resultado.duplicadas }}</li>
+  </ul>
+  {% if resultado.mensagens %}
+    <h6>Pendências principais</h6>
+    <ul>{% for m in resultado.mensagens %}<li>{{ m }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endif %}
+{% if colunas %}
+<div class="card p-3 mt-3"><h5>Colunas encontradas</h5><pre>{{ colunas }}</pre></div>
+{% endif %}
+{% endblock %}

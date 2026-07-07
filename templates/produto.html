@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>{{ 'Editar produto' if produto else 'Novo produto' }}</h3>
+<div class="card p-3">
+<form method="post" class="row g-3">
+  <div class="col-md-3"><label class="form-label">Código</label><input name="codigo" class="form-control" value="{{ produto.codigo if produto else '' }}" required></div>
+  <div class="col-md-3"><label class="form-label">SKU</label><input name="sku" class="form-control" value="{{ produto.sku if produto else '' }}"></div>
+  <div class="col-md-6"><label class="form-label">Códigos alternativos</label><input name="codigos_alternativos" class="form-control" value="{{ produto.codigos_alternativos if produto else '' }}" placeholder="Separe por ;"></div>
+  <div class="col-12"><label class="form-label">Descrição</label><input name="descricao" class="form-control" value="{{ produto.descricao if produto else '' }}" required></div>
+  <div class="col-md-2"><label class="form-label">Quantidade</label><input name="quantidade" type="number" step="0.001" class="form-control" value="{{ produto.quantidade if produto else 0 }}"></div>
+  <div class="col-md-2"><label class="form-label">Estoque mínimo</label><input name="estoque_minimo" type="number" step="0.001" class="form-control" value="{{ produto.estoque_minimo if produto else 0 }}"></div>
+  <div class="col-md-3"><label class="form-label">Localização</label><input name="localizacao" class="form-control" value="{{ produto.localizacao if produto else '' }}"></div>
+  <div class="col-md-2"><label class="form-label">Custo produto</label><input name="custo_produto" type="number" step="0.01" class="form-control" value="{{ produto.custo_produto if produto else 0 }}"></div>
+  <div class="col-12"><label class="form-label">Observações</label><textarea name="observacoes" class="form-control" rows="3">{{ produto.observacoes if produto else '' }}</textarea></div>
+  <div class="col-12"><button class="btn btn-success">Salvar</button><a class="btn btn-secondary" href="{{ url_for('index') }}">Voltar</a></div>
+</form>
+</div>
+{% if produto %}
+<div class="card p-3 mt-3">
+  <h5>Ajuste rápido de estoque</h5>
+  <form method="post" action="{{ url_for('ajuste_estoque', produto_id=produto.id) }}" class="row g-2">
+    <div class="col-md-3"><select name="tipo" class="form-select"><option value="entrada">Entrada</option><option value="saida">Saída</option><option value="ajuste">Ajuste positivo</option><option value="ajuste_negativo">Ajuste negativo</option></select></div>
+    <div class="col-md-2"><input name="quantidade" type="number" step="0.001" class="form-control" placeholder="Quantidade"></div>
+    <div class="col-md-5"><input name="observacao" class="form-control" placeholder="Observação"></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-outline-dark">Lançar</button></div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,1 +1,42 @@
-
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Produtos do estoque Mercado Livre</h3>
+  <a class="btn btn-primary" href="{{ url_for('produto_novo') }}">Novo produto</a>
+</div>
+<div class="row g-3 mb-3">
+  <div class="col-md-3"><div class="card p-3"><div class="small-muted">Produtos ativos</div><div class="h4">{{ k_prod.total }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="small-muted">Quantidade total</div><div class="h4">{{ k_prod.qtd }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="small-muted">Abaixo do mínimo</div><div class="h4 text-danger">{{ baixo }}</div></div></div>
+  <div class="col-md-3"><div class="card p-3"><div class="small-muted">Anúncios cadastrados</div><div class="h4">{{ anuncios }}</div></div></div>
+</div>
+<div class="card p-3 mb-3">
+  <form class="row g-2">
+    <div class="col-md-7"><input name="busca" value="{{ busca }}" class="form-control" placeholder="Buscar por código, SKU, descrição ou código alternativo"></div>
+    <div class="col-md-3"><select name="filtro" class="form-select"><option value="todos" {% if filtro=='todos' %}selected{% endif %}>Todos</option><option value="baixo" {% if filtro=='baixo' %}selected{% endif %}>Abaixo do mínimo</option><option value="negativo" {% if filtro=='negativo' %}selected{% endif %}>Estoque negativo</option></select></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-dark">Filtrar</button></div>
+  </form>
+</div>
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle">
+      <thead><tr><th>Código</th><th>SKU</th><th>Descrição</th><th>Qtd.</th><th>Mínimo</th><th>Local</th><th>Custo</th><th>Anúncios</th><th></th></tr></thead>
+      <tbody>
+        {% for p in produtos %}
+        <tr>
+          <td class="nowrap"><strong>{{ p.codigo }}</strong><br><span class="small-muted">{{ p.codigos_alternativos }}</span></td>
+          <td>{{ p.sku }}</td>
+          <td>{{ p.descricao }}</td>
+          <td class="fw-bold {% if p.estoque_minimo > 0 and p.quantidade <= p.estoque_minimo %}text-danger{% endif %}">{{ p.quantidade }}</td>
+          <td>{{ p.estoque_minimo }}</td>
+          <td>{{ p.localizacao }}</td>
+          <td>R$ {{ '%.2f'|format(p.custo_produto or 0) }}</td>
+          <td>{{ p.qtd_anuncios }}</td>
+          <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('produto_editar', produto_id=p.id) }}">Editar</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

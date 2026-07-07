@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Anúncios Mercado Livre e composição</h3>
+<div class="alert alert-info">A composição define quais produtos reais serão baixados quando uma venda do anúncio acontecer. Vendas Full são ignoradas na baixa, porque o estoque já foi enviado ao Full.</div>
+<div class="card p-3">
+<table class="table table-sm table-hover">
+<thead><tr><th>Anúncio ML</th><th>SKU anúncio</th><th>Título</th><th>Entrega</th><th>Status</th><th>Itens</th><th></th></tr></thead>
+<tbody>
+{% for a in anuncios %}
+<tr><td class="nowrap"><strong>{{ a.codigo_anuncio_ml }}</strong></td><td>{{ a.sku_anuncio }}</td><td>{{ a.titulo }}</td><td>{{ a.forma_entrega }}</td><td>{{ a.status }}</td><td>{{ a.itens_composicao }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('anuncio_detalhe', anuncio_id=a.id) }}">Composição</a></td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% endblock %}

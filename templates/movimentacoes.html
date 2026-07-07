@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Movimentações de estoque</h3>
+<div class="card p-3">
+<div class="table-responsive">
+<table class="table table-sm table-hover">
+<thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Qtd</th><th>Saldo ant.</th><th>Saldo novo</th><th>Origem</th><th>Ref.</th><th>Obs.</th></tr></thead>
+<tbody>{% for r in rows %}<tr><td>{{ r.criado_em }}</td><td><strong>{{ r.codigo }}</strong> — {{ r.descricao }}</td><td>{{ r.tipo }}</td><td>{{ r.quantidade }}</td><td>{{ r.saldo_anterior }}</td><td>{{ r.saldo_novo }}</td><td>{{ r.origem }}</td><td>{{ r.referencia }}</td><td>{{ r.observacao }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+</div>
+{% endblock %}

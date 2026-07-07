@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Vendas importadas</h3>
+<div class="card p-3">
+<div class="table-responsive">
+<table class="table table-sm table-hover">
+<thead><tr><th>Importado</th><th>Venda</th><th>Anúncio</th><th>SKU</th><th>Qtd</th><th>Entrega</th><th>Full</th><th>Processada</th><th>Mensagem</th></tr></thead>
+<tbody>{% for v in vendas %}<tr><td>{{ v.importado_em }}</td><td>{{ v.numero_venda }}</td><td>{{ v.codigo_anuncio_ml }}</td><td>{{ v.sku }}</td><td>{{ v.quantidade_vendida }}</td><td>{{ v.forma_entrega }}</td><td>{{ 'SIM' if v.is_full else 'NÃO' }}</td><td>{{ 'SIM' if v.processada else 'NÃO' }}</td><td>{{ v.mensagem }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+</div>
+{% endblock %}

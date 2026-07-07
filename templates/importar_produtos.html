@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Importar produtos, anúncios e composição</h3>
+<div class="card p-3 mb-3">
+  <p>Use esta importação para cadastrar produtos reais, anúncios do Mercado Livre e a composição dos kits.</p>
+  <a class="btn btn-outline-success" href="{{ url_for('modelo_produtos') }}">Baixar modelo Excel</a>
+</div>
+<div class="card p-3">
+  <form method="post" enctype="multipart/form-data">
+    <input type="file" name="arquivo" class="form-control mb-3" accept=".xlsx,.xls" required>
+    <button class="btn btn-primary">Importar planilha</button>
+  </form>
+</div>
+{% if resultado %}
+<div class="card p-3 mt-3">
+  <h5>Resultado</h5>
+  <ul>
+    <li>Produtos criados: {{ resultado.criados }}</li>
+    <li>Produtos atualizados: {{ resultado.atualizados }}</li>
+    <li>Anúncios criados: {{ resultado.anuncios_criados }}</li>
+    <li>Composições atualizadas: {{ resultado.composicoes }}</li>
+  </ul>
+</div>
+{% endif %}
+{% endblock %}
