@@ -235,6 +235,26 @@ def init_db():
                     valor_total NUMERIC(12,2) NOT NULL DEFAULT 0
                 )
             """)
+            cur.execute("ALTER TABLE itens_nota_fiscal_entrada ADD COLUMN IF NOT EXISTS pendente_vinculo BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE itens_nota_fiscal_entrada ADD COLUMN IF NOT EXISTS processado_estoque BOOLEAN NOT NULL DEFAULT TRUE")
+            cur.execute("ALTER TABLE itens_nota_fiscal_entrada ADD COLUMN IF NOT EXISTS fornecedor_id INTEGER REFERENCES fornecedores(id)")
+            cur.execute("ALTER TABLE itens_nota_fiscal_entrada ADD COLUMN IF NOT EXISTS vinculo_id INTEGER")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS vinculos_produto_fornecedor (
+                    id SERIAL PRIMARY KEY,
+                    fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id) ON DELETE CASCADE,
+                    produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+                    codigo_produto_fornecedor TEXT NOT NULL,
+                    descricao_produto_fornecedor TEXT DEFAULT '',
+                    ean TEXT DEFAULT '',
+                    ncm TEXT DEFAULT '',
+                    criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                    atualizado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                    UNIQUE(fornecedor_id, codigo_produto_fornecedor)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_vinculos_fornecedor_codigo ON vinculos_produto_fornecedor(fornecedor_id, codigo_produto_fornecedor)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_itens_nf_pendente ON itens_nota_fiscal_entrada(pendente_vinculo, processado_estoque)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_fornecedores_cnpj ON fornecedores(cnpj)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_notas_chave ON notas_fiscais_entrada(chave_nfe)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_produtos_codigo ON produtos(codigo)")
@@ -846,35 +866,65 @@ def parse_nfe_xml(file_storage):
     return fornecedor, nota, itens
 
 
-def localizar_ou_criar_produto_por_xml(cur, item):
-    codigo = txt(item.get("codigo")).upper()
-    ean = txt(item.get("ean")).upper()
-    produto = None
-    if codigo:
-        cur.execute("SELECT * FROM produtos WHERE codigo=%s FOR UPDATE", (codigo,))
-        produto = cur.fetchone()
-    if not produto and codigo:
-        cur.execute("""
-            SELECT * FROM produtos
-            WHERE codigos_alternativos ILIKE %s
-            ORDER BY id LIMIT 1 FOR UPDATE
-        """, (f"%{codigo}%",))
-        produto = cur.fetchone()
-    if not produto and ean and ean.upper() not in {"SEM GTIN", "SEMGTIN", ""}:
-        cur.execute("SELECT * FROM produtos WHERE ean=%s ORDER BY id LIMIT 1 FOR UPDATE", (ean,))
-        produto = cur.fetchone()
-    if produto:
-        return produto["id"], False, dec(produto["quantidade"])
 
-    novo_codigo = codigo or (ean if ean and ean.upper() not in {"SEM GTIN", "SEMGTIN"} else f"XML-{datetime.now().strftime('%Y%m%d%H%M%S%f')}")
+def localizar_produto_por_vinculo_xml(cur, fornecedor_id, item):
+    """Procura produto usando vínculo fornecedor+código. Não cria produto automático.
+    Isso evita duplicidade quando o código do fornecedor é diferente do código interno da loja.
+    """
+    codigo = txt(item.get("codigo")).upper()
+    if not codigo:
+        return None, None, None
     cur.execute("""
-        INSERT INTO produtos (codigo, sku, descricao, quantidade, custo_produto, ean, ncm, pendente_revisao, observacoes)
-        VALUES (%s,%s,%s,0,%s,%s,%s,TRUE,%s)
-        ON CONFLICT (codigo) DO UPDATE SET atualizado_em=NOW()
-        RETURNING id, quantidade
-    """, (novo_codigo, novo_codigo, item.get("descricao") or novo_codigo, dec(item.get("valor_unitario"),0), ean, item.get("ncm") or "", "Cadastrado automaticamente por XML de NF-e; revisar cadastro."))
-    r = cur.fetchone()
-    return r["id"], True, dec(r["quantidade"])
+        SELECT v.id AS vinculo_id, p.*
+        FROM vinculos_produto_fornecedor v
+        JOIN produtos p ON p.id = v.produto_id
+        WHERE v.fornecedor_id=%s AND UPPER(v.codigo_produto_fornecedor)=UPPER(%s)
+        LIMIT 1 FOR UPDATE OF p
+    """, (fornecedor_id, codigo))
+    produto = cur.fetchone()
+    if produto:
+        return produto["id"], produto["vinculo_id"], dec(produto["quantidade"])
+    return None, None, None
+
+
+def registrar_entrada_estoque_nf(cur, item_nota_id, produto_id, qtd, referencia, observacao):
+    cur.execute("SELECT quantidade FROM produtos WHERE id=%s FOR UPDATE", (produto_id,))
+    p = cur.fetchone()
+    if not p:
+        raise ValueError("Produto interno não encontrado para registrar entrada.")
+    saldo_anterior = dec(p["quantidade"])
+    saldo_novo = saldo_anterior + dec(qtd, 0)
+    cur.execute("UPDATE produtos SET quantidade=%s, atualizado_em=NOW() WHERE id=%s", (saldo_novo, produto_id))
+    cur.execute("""
+        INSERT INTO movimentacoes_estoque
+        (produto_id, tipo, quantidade, saldo_anterior, saldo_novo, origem, referencia, observacao)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (produto_id, "entrada_nf", dec(qtd,0), saldo_anterior, saldo_novo, "xml_nfe", referencia, observacao))
+    cur.execute("""
+        UPDATE itens_nota_fiscal_entrada
+        SET produto_id=%s, pendente_vinculo=FALSE, processado_estoque=TRUE
+        WHERE id=%s
+    """, (produto_id, item_nota_id))
+
+
+def criar_ou_atualizar_vinculo_fornecedor(cur, fornecedor_id, produto_id, item):
+    codigo = txt(item.get("codigo") or item.get("codigo_produto_fornecedor")).upper()
+    if not codigo:
+        raise ValueError("Código do produto do fornecedor não informado.")
+    cur.execute("""
+        INSERT INTO vinculos_produto_fornecedor
+        (fornecedor_id, produto_id, codigo_produto_fornecedor, descricao_produto_fornecedor, ean, ncm)
+        VALUES (%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (fornecedor_id, codigo_produto_fornecedor)
+        DO UPDATE SET
+            produto_id=EXCLUDED.produto_id,
+            descricao_produto_fornecedor=EXCLUDED.descricao_produto_fornecedor,
+            ean=EXCLUDED.ean,
+            ncm=EXCLUDED.ncm,
+            atualizado_em=NOW()
+        RETURNING id
+    """, (fornecedor_id, produto_id, codigo, item.get("descricao") or "", item.get("ean") or "", item.get("ncm") or ""))
+    return cur.fetchone()["id"]
 
 
 @app.route("/fornecedores")
@@ -943,7 +993,8 @@ def importar_xml_nfe():
             flash("XML lido, mas nenhum item de produto foi encontrado.", "danger")
             return redirect(url_for("importar_xml_nfe"))
 
-        produtos_criados = 0
+        vinculados = 0
+        pendentes = 0
         movimentos = 0
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute("SELECT id FROM notas_fiscais_entrada WHERE chave_nfe=%s", (nota["chave_nfe"],))
@@ -976,34 +1027,145 @@ def importar_xml_nfe():
             nota_id = cur.fetchone()["id"]
 
             for item in itens:
-                produto_id, criado, saldo_anterior = localizar_ou_criar_produto_por_xml(cur, item)
-                if criado:
-                    produtos_criados += 1
                 qtd = dec(item.get("quantidade"), 0)
-                saldo_novo = saldo_anterior + qtd
-                cur.execute("UPDATE produtos SET quantidade=%s, ean=COALESCE(NULLIF(ean,''), %s), ncm=COALESCE(NULLIF(ncm,''), %s), atualizado_em=NOW() WHERE id=%s", (saldo_novo, item.get("ean") or "", item.get("ncm") or "", produto_id))
-                cur.execute("""
-                    INSERT INTO itens_nota_fiscal_entrada
-                    (nota_id, produto_id, codigo_produto_fornecedor, descricao, ncm, cfop, ean, quantidade, valor_unitario, valor_total)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (nota_id, produto_id, item.get("codigo") or "", item.get("descricao") or "", item.get("ncm") or "", item.get("cfop") or "", item.get("ean") or "", qtd, dec(item.get("valor_unitario"),0), dec(item.get("valor_total"),0)))
-                cur.execute("""
-                    INSERT INTO movimentacoes_estoque
-                    (produto_id, tipo, quantidade, saldo_anterior, saldo_novo, origem, referencia, observacao)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (produto_id, "entrada_nf", qtd, saldo_anterior, saldo_novo, "xml_nfe", nota.get("numero_nf") or nota["chave_nfe"], f"Entrada por XML NF-e {nota.get('numero_nf') or ''}"))
-                movimentos += 1
+                produto_id, vinculo_id, _saldo = localizar_produto_por_vinculo_xml(cur, fornecedor_id, item)
+                if produto_id:
+                    cur.execute("""
+                        INSERT INTO itens_nota_fiscal_entrada
+                        (nota_id, fornecedor_id, produto_id, vinculo_id, codigo_produto_fornecedor, descricao, ncm, cfop, ean, quantidade, valor_unitario, valor_total, pendente_vinculo, processado_estoque)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,FALSE) RETURNING id
+                    """, (nota_id, fornecedor_id, produto_id, vinculo_id, item.get("codigo") or "", item.get("descricao") or "", item.get("ncm") or "", item.get("cfop") or "", item.get("ean") or "", qtd, dec(item.get("valor_unitario"),0), dec(item.get("valor_total"),0)))
+                    item_nota_id = cur.fetchone()["id"]
+                    registrar_entrada_estoque_nf(cur, item_nota_id, produto_id, qtd, nota.get("numero_nf") or nota["chave_nfe"], f"Entrada por XML NF-e {nota.get('numero_nf') or ''}")
+                    vinculados += 1
+                    movimentos += 1
+                else:
+                    cur.execute("""
+                        INSERT INTO itens_nota_fiscal_entrada
+                        (nota_id, fornecedor_id, produto_id, codigo_produto_fornecedor, descricao, ncm, cfop, ean, quantidade, valor_unitario, valor_total, pendente_vinculo, processado_estoque)
+                        VALUES (%s,%s,NULL,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,FALSE)
+                    """, (nota_id, fornecedor_id, item.get("codigo") or "", item.get("descricao") or "", item.get("ncm") or "", item.get("cfop") or "", item.get("ean") or "", qtd, dec(item.get("valor_unitario"),0), dec(item.get("valor_total"),0)))
+                    pendentes += 1
             conn.commit()
-        resultado = {"nota_id": nota_id, "itens": len(itens), "produtos_criados": produtos_criados, "movimentos": movimentos, "fornecedor": fornecedor.get("razao_social"), "numero_nf": nota.get("numero_nf")}
-        flash("XML de NF-e importado com sucesso. Fornecedor, nota, itens e entrada de estoque foram registrados.", "success")
+        resultado = {"nota_id": nota_id, "itens": len(itens), "vinculados": vinculados, "pendentes": pendentes, "movimentos": movimentos, "fornecedor": fornecedor.get("razao_social"), "numero_nf": nota.get("numero_nf")}
+        if pendentes:
+            flash(f"XML importado. {movimentos} item(ns) deram entrada no estoque e {pendentes} item(ns) ficaram pendentes de vínculo.", "warning")
+        else:
+            flash("XML de NF-e importado com sucesso. Todos os itens foram reconhecidos por vínculo e deram entrada no estoque.", "success")
     return render_template("importar_xml_nfe.html", resultado=resultado)
 
+
+
+@app.route("/vinculos-fornecedor")
+def vinculos_fornecedor():
+    busca = request.args.get("busca", "").strip()
+    where = []
+    params = []
+    if busca:
+        like = f"%{busca}%"
+        where.append("(f.razao_social ILIKE %s OR v.codigo_produto_fornecedor ILIKE %s OR v.descricao_produto_fornecedor ILIKE %s OR p.codigo ILIKE %s OR p.descricao ILIKE %s)")
+        params += [like, like, like, like, like]
+    sql_where = "WHERE " + " AND ".join(where) if where else ""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT v.*, f.razao_social, f.cnpj, p.codigo AS codigo_interno, p.descricao AS descricao_interna
+            FROM vinculos_produto_fornecedor v
+            JOIN fornecedores f ON f.id=v.fornecedor_id
+            JOIN produtos p ON p.id=v.produto_id
+            {sql_where}
+            ORDER BY f.razao_social, v.codigo_produto_fornecedor
+            LIMIT 500
+        """, params)
+        rows = cur.fetchall()
+    return render_template("vinculos_fornecedor.html", vinculos=rows, busca=busca)
+
+
+@app.route("/pendentes-vinculo")
+def pendentes_vinculo():
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT i.*, n.numero_nf, n.serie_nf, n.chave_nfe, f.razao_social, f.cnpj
+            FROM itens_nota_fiscal_entrada i
+            JOIN notas_fiscais_entrada n ON n.id=i.nota_id
+            LEFT JOIN fornecedores f ON f.id=COALESCE(i.fornecedor_id, n.fornecedor_id)
+            WHERE i.pendente_vinculo=TRUE AND i.processado_estoque=FALSE
+            ORDER BY n.criado_em DESC, i.id DESC
+            LIMIT 500
+        """)
+        pendentes = cur.fetchall()
+        cur.execute("SELECT id, codigo, descricao, quantidade FROM produtos WHERE ativo=TRUE ORDER BY descricao LIMIT 2000")
+        produtos = cur.fetchall()
+    return render_template("pendentes_vinculo.html", pendentes=pendentes, produtos=produtos)
+
+
+@app.route("/pendente-vinculo/<int:item_id>/vincular", methods=["POST"])
+def vincular_item_pendente(item_id):
+    produto_id = int(request.form.get("produto_id"))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT i.*, n.numero_nf, n.chave_nfe, COALESCE(i.fornecedor_id, n.fornecedor_id) AS forn_id
+            FROM itens_nota_fiscal_entrada i
+            JOIN notas_fiscais_entrada n ON n.id=i.nota_id
+            WHERE i.id=%s FOR UPDATE
+        """, (item_id,))
+        item = cur.fetchone()
+        if not item:
+            flash("Item pendente não encontrado.", "danger")
+            return redirect(url_for("pendentes_vinculo"))
+        if item["processado_estoque"]:
+            flash("Esse item já foi processado anteriormente.", "warning")
+            return redirect(url_for("pendentes_vinculo"))
+        vinculo_id = criar_ou_atualizar_vinculo_fornecedor(cur, item["forn_id"], produto_id, item)
+        cur.execute("UPDATE itens_nota_fiscal_entrada SET vinculo_id=%s WHERE id=%s", (vinculo_id, item_id))
+        registrar_entrada_estoque_nf(cur, item_id, produto_id, item["quantidade"], item["numero_nf"] or item["chave_nfe"], "Entrada NF-e após vínculo manual com produto existente")
+        conn.commit()
+    flash("Vínculo salvo e entrada no estoque registrada.", "success")
+    return redirect(url_for("pendentes_vinculo"))
+
+
+@app.route("/pendente-vinculo/<int:item_id>/cadastrar-produto", methods=["POST"])
+def cadastrar_produto_item_pendente(item_id):
+    codigo_interno = request.form.get("codigo_interno", "").strip().upper()
+    descricao_interna = request.form.get("descricao_interna", "").strip()
+    if not codigo_interno or not descricao_interna:
+        flash("Informe código interno e descrição para cadastrar o produto.", "danger")
+        return redirect(url_for("pendentes_vinculo"))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT i.*, n.numero_nf, n.chave_nfe, COALESCE(i.fornecedor_id, n.fornecedor_id) AS forn_id
+            FROM itens_nota_fiscal_entrada i
+            JOIN notas_fiscais_entrada n ON n.id=i.nota_id
+            WHERE i.id=%s FOR UPDATE
+        """, (item_id,))
+        item = cur.fetchone()
+        if not item:
+            flash("Item pendente não encontrado.", "danger")
+            return redirect(url_for("pendentes_vinculo"))
+        if item["processado_estoque"]:
+            flash("Esse item já foi processado anteriormente.", "warning")
+            return redirect(url_for("pendentes_vinculo"))
+        cur.execute("SELECT id FROM produtos WHERE codigo=%s", (codigo_interno,))
+        existente = cur.fetchone()
+        if existente:
+            produto_id = existente["id"]
+        else:
+            cur.execute("""
+                INSERT INTO produtos (codigo, sku, descricao, quantidade, custo_produto, ean, ncm, pendente_revisao, observacoes)
+                VALUES (%s,%s,%s,0,%s,%s,%s,FALSE,%s) RETURNING id
+            """, (codigo_interno, codigo_interno, descricao_interna, dec(item["valor_unitario"],0), item["ean"] or "", item["ncm"] or "", "Cadastrado a partir de item pendente de XML NF-e."))
+            produto_id = cur.fetchone()["id"]
+        vinculo_id = criar_ou_atualizar_vinculo_fornecedor(cur, item["forn_id"], produto_id, item)
+        cur.execute("UPDATE itens_nota_fiscal_entrada SET vinculo_id=%s WHERE id=%s", (vinculo_id, item_id))
+        registrar_entrada_estoque_nf(cur, item_id, produto_id, item["quantidade"], item["numero_nf"] or item["chave_nfe"], "Entrada NF-e após cadastro de novo produto interno")
+        conn.commit()
+    flash("Produto criado/vinculado e entrada no estoque registrada.", "success")
+    return redirect(url_for("pendentes_vinculo"))
 
 @app.route("/backup")
 def backup():
     bio = BytesIO()
     with get_conn() as conn:
-        tabelas = ["produtos", "anuncios_ml", "composicao_anuncio", "vendas_ml", "movimentacoes_estoque", "fornecedores", "notas_fiscais_entrada", "itens_nota_fiscal_entrada"]
+        tabelas = ["produtos", "anuncios_ml", "composicao_anuncio", "vendas_ml", "movimentacoes_estoque", "fornecedores", "vinculos_produto_fornecedor", "notas_fiscais_entrada", "itens_nota_fiscal_entrada"]
         with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
             for t in tabelas:
                 df = pd.read_sql(f"SELECT * FROM {t}", conn)
