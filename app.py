@@ -414,6 +414,63 @@ def modelo_produtos():
     return send_file(bio, as_attachment=True, download_name="modelo_produtos_anuncios_ml.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+
+
+def detectar_planilha_produtos(file_storage):
+    """Lê tanto o modelo do sistema quanto o relatório de anúncios do Mercado Livre."""
+    data = file_storage.read()
+
+    def read_first():
+        bio = BytesIO(data)
+        return pd.read_excel(bio, sheet_name=0).dropna(how="all")
+
+    df = read_first()
+    col_codigo = first_col(df, "CODIGO_PRODUTO", "CODIGO", "Código")
+    col_desc = first_col(df, "DESCRICAO_PRODUTO", "DESCRIÇÃO_PRODUTO", "DESCRICAO", "Descrição")
+    if col_codigo and col_desc:
+        return df, "modelo_sistema"
+
+    # Tenta detectar relatório exportado pelo Mercado Livre: aba Anúncios,
+    # cabeçalho técnico na primeira linha e linhas 1-4 com ajuda/descrição.
+    bio = BytesIO(data)
+    xls = pd.ExcelFile(bio)
+    sheet = "Anúncios" if "Anúncios" in xls.sheet_names else ("Anuncios" if "Anuncios" in xls.sheet_names else None)
+    if sheet:
+        bio = BytesIO(data)
+        df_ml = pd.read_excel(bio, sheet_name=sheet, header=0, skiprows=[1, 2, 3, 4]).dropna(how="all")
+        if first_col(df_ml, "ITEM_ID") and first_col(df_ml, "TITLE"):
+            item = first_col(df_ml, "ITEM_ID")
+            prod = first_col(df_ml, "PRODUCT_NUMBER")
+            title = first_col(df_ml, "TITLE")
+            qty = first_col(df_ml, "QUANTITY")
+            ship = first_col(df_ml, "SHIPPING_METHOD")
+            status = first_col(df_ml, "STATUS")
+            price = first_col(df_ml, "PRICE")
+            listing = first_col(df_ml, "LISTING_TYPE")
+            out = pd.DataFrame()
+            out["CODIGO_PRODUTO"] = df_ml[prod].where(df_ml[prod].notna(), df_ml[item]) if prod else df_ml[item]
+            out["CODIGOS_ALTERNATIVOS"] = ""
+            out["SKU_PRODUTO"] = df_ml[prod] if prod else df_ml[item]
+            out["DESCRICAO_PRODUTO"] = df_ml[title]
+            out["QUANTIDADE_ESTOQUE"] = df_ml[qty] if qty else 0
+            out["ESTOQUE_MINIMO"] = ""
+            out["LOCALIZACAO"] = ""
+            out["CUSTO_PRODUTO"] = ""
+            out["OBSERVACOES"] = "Importado do relatório de anúncios Mercado Livre"
+            out["CODIGO_ANUNCIO_ML"] = df_ml[item]
+            out["SKU_ANUNCIO"] = df_ml[prod] if prod else df_ml[item]
+            out["TITULO_ANUNCIO"] = df_ml[title]
+            out["FORMA_ENTREGA"] = df_ml[ship] if ship else ""
+            out["STATUS_ANUNCIO"] = df_ml[status] if status else ""
+            out["QTD_POR_VENDA"] = 1
+            out["PRECO_ANUNCIO"] = df_ml[price] if price else ""
+            out["TIPO_ANUNCIO"] = df_ml[listing] if listing else ""
+            out = out.dropna(subset=["CODIGO_PRODUTO", "DESCRICAO_PRODUTO"], how="any")
+            return out, "relatorio_mercado_livre"
+
+    return df, "desconhecido"
+
+
 @app.route("/importar-produtos", methods=["GET", "POST"])
 def importar_produtos():
     resultado = None
@@ -422,9 +479,7 @@ def importar_produtos():
         if not f:
             flash("Selecione um arquivo Excel.", "danger")
             return redirect(url_for("importar_produtos"))
-        df = pd.read_excel(f, sheet_name=0)
-        # Remove linhas totalmente vazias
-        df = df.dropna(how="all")
+        df, tipo_planilha = detectar_planilha_produtos(f)
         col_codigo = first_col(df, "CODIGO_PRODUTO", "CODIGO", "Código")
         col_alt = first_col(df, "CODIGOS_ALTERNATIVOS", "Códigos alternativos", "CODIGOS ALTERNATIVOS")
         col_sku_prod = first_col(df, "SKU_PRODUTO", "SKU")
@@ -441,7 +496,7 @@ def importar_produtos():
         col_status = first_col(df, "STATUS_ANUNCIO", "Status")
         col_qtd_venda = first_col(df, "QTD_POR_VENDA", "QUANTIDADE_POR_VENDA", "Quantidade por venda")
         if not col_codigo or not col_desc:
-            flash("A planilha precisa ter ao menos CODIGO_PRODUTO e DESCRICAO_PRODUTO.", "danger")
+            flash("A planilha precisa ter CODIGO_PRODUTO e DESCRICAO_PRODUTO, ou ser o relatório do Mercado Livre na aba Anúncios.", "danger")
             return redirect(url_for("importar_produtos"))
         criados = atualizados = anuncios_criados = comps = 0
         with get_conn() as conn, conn.cursor() as cur:
@@ -502,7 +557,10 @@ def importar_produtos():
                     comps += 1
             conn.commit()
         resultado = {"criados": criados, "atualizados": atualizados, "anuncios_criados": anuncios_criados, "composicoes": comps}
-        flash("Importação concluída.", "success")
+        if tipo_planilha == "relatorio_mercado_livre":
+            flash("Relatório de anúncios do Mercado Livre importado. Produtos/anúncios foram criados com QTD_POR_VENDA = 1; ajuste a composição dos kits depois.", "success")
+        else:
+            flash("Importação concluída.", "success")
     return render_template("importar_produtos.html", resultado=resultado)
 
 
