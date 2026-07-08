@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -186,6 +187,56 @@ def init_db():
                     criado_em TIMESTAMP NOT NULL DEFAULT NOW()
                 )
             """)
+            cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ean TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ncm TEXT DEFAULT ''")
+            cur.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS pendente_revisao BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS fornecedores (
+                    id SERIAL PRIMARY KEY,
+                    cnpj TEXT UNIQUE NOT NULL,
+                    razao_social TEXT NOT NULL,
+                    nome_fantasia TEXT DEFAULT '',
+                    ie TEXT DEFAULT '',
+                    endereco TEXT DEFAULT '',
+                    cidade TEXT DEFAULT '',
+                    uf TEXT DEFAULT '',
+                    telefone TEXT DEFAULT '',
+                    email TEXT DEFAULT '',
+                    criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                    atualizado_em TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS notas_fiscais_entrada (
+                    id SERIAL PRIMARY KEY,
+                    chave_nfe TEXT UNIQUE NOT NULL,
+                    numero_nf TEXT DEFAULT '',
+                    serie_nf TEXT DEFAULT '',
+                    data_emissao TIMESTAMP NULL,
+                    data_entrada TIMESTAMP NOT NULL DEFAULT NOW(),
+                    fornecedor_id INTEGER REFERENCES fornecedores(id),
+                    valor_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+                    arquivo_xml_nome TEXT DEFAULT '',
+                    criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS itens_nota_fiscal_entrada (
+                    id SERIAL PRIMARY KEY,
+                    nota_id INTEGER NOT NULL REFERENCES notas_fiscais_entrada(id) ON DELETE CASCADE,
+                    produto_id INTEGER REFERENCES produtos(id),
+                    codigo_produto_fornecedor TEXT DEFAULT '',
+                    descricao TEXT DEFAULT '',
+                    ncm TEXT DEFAULT '',
+                    cfop TEXT DEFAULT '',
+                    ean TEXT DEFAULT '',
+                    quantidade NUMERIC(12,3) NOT NULL DEFAULT 0,
+                    valor_unitario NUMERIC(12,4) NOT NULL DEFAULT 0,
+                    valor_total NUMERIC(12,2) NOT NULL DEFAULT 0
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_fornecedores_cnpj ON fornecedores(cnpj)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_notas_chave ON notas_fiscais_entrada(chave_nfe)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_produtos_codigo ON produtos(codigo)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_anuncios_codigo ON anuncios_ml(codigo_anuncio_ml)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_vendas_codigo ON vendas_ml(codigo_anuncio_ml)")
@@ -698,11 +749,261 @@ def movimentacoes():
     return render_template("movimentacoes.html", rows=rows)
 
 
+
+
+def only_digits(v):
+    return re.sub(r"\D+", "", txt(v))
+
+
+def xml_text(node, path, default=""):
+    found = node.find(path)
+    return txt(found.text) if found is not None else default
+
+
+def nfe_namespace(root):
+    if root.tag.startswith("{"):
+        return root.tag.split("}")[0].strip("{")
+    return ""
+
+
+def ns_tag(ns, tag):
+    return f"{{{ns}}}{tag}" if ns else tag
+
+
+def find_first(root, ns, tag):
+    return root.find(f".//{ns_tag(ns, tag)}")
+
+
+def parse_nfe_xml(file_storage):
+    data = file_storage.read()
+    root = ET.fromstring(data)
+    ns = nfe_namespace(root)
+    nfe = find_first(root, ns, "NFe") or root
+    inf = find_first(nfe, ns, "infNFe")
+    if inf is None:
+        raise ValueError("XML não parece ser uma NF-e válida: tag infNFe não encontrada.")
+    chave = txt(inf.attrib.get("Id", "")).replace("NFe", "")
+    if not chave:
+        prot = find_first(root, ns, "protNFe")
+        if prot is not None:
+            chave = xml_text(prot, f".//{ns_tag(ns,'chNFe')}")
+    ide = inf.find(ns_tag(ns, "ide"))
+    emit = inf.find(ns_tag(ns, "emit"))
+    total = inf.find(f".//{ns_tag(ns,'ICMSTot')}")
+    if emit is None or ide is None:
+        raise ValueError("XML não contém dados básicos de emitente/nota.")
+
+    ender = emit.find(ns_tag(ns, "enderEmit"))
+    fornecedor = {
+        "cnpj": only_digits(xml_text(emit, ns_tag(ns, "CNPJ")) or xml_text(emit, ns_tag(ns, "CPF"))),
+        "razao_social": xml_text(emit, ns_tag(ns, "xNome")),
+        "nome_fantasia": xml_text(emit, ns_tag(ns, "xFant")),
+        "ie": xml_text(emit, ns_tag(ns, "IE")),
+        "endereco": "",
+        "cidade": "",
+        "uf": "",
+        "telefone": "",
+    }
+    if ender is not None:
+        fornecedor["endereco"] = " ".join(x for x in [
+            xml_text(ender, ns_tag(ns, "xLgr")),
+            xml_text(ender, ns_tag(ns, "nro")),
+            xml_text(ender, ns_tag(ns, "xBairro")),
+        ] if x)
+        fornecedor["cidade"] = xml_text(ender, ns_tag(ns, "xMun"))
+        fornecedor["uf"] = xml_text(ender, ns_tag(ns, "UF"))
+        fornecedor["telefone"] = xml_text(ender, ns_tag(ns, "fone"))
+
+    nota = {
+        "chave_nfe": chave,
+        "numero_nf": xml_text(ide, ns_tag(ns, "nNF")),
+        "serie_nf": xml_text(ide, ns_tag(ns, "serie")),
+        "data_emissao": None,
+        "valor_total": dec(xml_text(total, ns_tag(ns, "vNF")) if total is not None else "0"),
+    }
+    dh = xml_text(ide, ns_tag(ns, "dhEmi")) or xml_text(ide, ns_tag(ns, "dEmi"))
+    if dh:
+        try:
+            nota["data_emissao"] = pd.to_datetime(dh).to_pydatetime().replace(tzinfo=None)
+        except Exception:
+            nota["data_emissao"] = None
+
+    itens = []
+    for det in inf.findall(ns_tag(ns, "det")):
+        prod = det.find(ns_tag(ns, "prod"))
+        if prod is None:
+            continue
+        itens.append({
+            "codigo": txt(xml_text(prod, ns_tag(ns, "cProd"))).upper(),
+            "descricao": xml_text(prod, ns_tag(ns, "xProd")),
+            "ncm": xml_text(prod, ns_tag(ns, "NCM")),
+            "cfop": xml_text(prod, ns_tag(ns, "CFOP")),
+            "ean": txt(xml_text(prod, ns_tag(ns, "cEAN")) or xml_text(prod, ns_tag(ns, "cEANTrib"))).upper(),
+            "quantidade": dec(xml_text(prod, ns_tag(ns, "qCom")), 0),
+            "valor_unitario": dec(xml_text(prod, ns_tag(ns, "vUnCom")), 0),
+            "valor_total": dec(xml_text(prod, ns_tag(ns, "vProd")), 0),
+        })
+    return fornecedor, nota, itens
+
+
+def localizar_ou_criar_produto_por_xml(cur, item):
+    codigo = txt(item.get("codigo")).upper()
+    ean = txt(item.get("ean")).upper()
+    produto = None
+    if codigo:
+        cur.execute("SELECT * FROM produtos WHERE codigo=%s FOR UPDATE", (codigo,))
+        produto = cur.fetchone()
+    if not produto and codigo:
+        cur.execute("""
+            SELECT * FROM produtos
+            WHERE codigos_alternativos ILIKE %s
+            ORDER BY id LIMIT 1 FOR UPDATE
+        """, (f"%{codigo}%",))
+        produto = cur.fetchone()
+    if not produto and ean and ean.upper() not in {"SEM GTIN", "SEMGTIN", ""}:
+        cur.execute("SELECT * FROM produtos WHERE ean=%s ORDER BY id LIMIT 1 FOR UPDATE", (ean,))
+        produto = cur.fetchone()
+    if produto:
+        return produto["id"], False, dec(produto["quantidade"])
+
+    novo_codigo = codigo or (ean if ean and ean.upper() not in {"SEM GTIN", "SEMGTIN"} else f"XML-{datetime.now().strftime('%Y%m%d%H%M%S%f')}")
+    cur.execute("""
+        INSERT INTO produtos (codigo, sku, descricao, quantidade, custo_produto, ean, ncm, pendente_revisao, observacoes)
+        VALUES (%s,%s,%s,0,%s,%s,%s,TRUE,%s)
+        ON CONFLICT (codigo) DO UPDATE SET atualizado_em=NOW()
+        RETURNING id, quantidade
+    """, (novo_codigo, novo_codigo, item.get("descricao") or novo_codigo, dec(item.get("valor_unitario"),0), ean, item.get("ncm") or "", "Cadastrado automaticamente por XML de NF-e; revisar cadastro."))
+    r = cur.fetchone()
+    return r["id"], True, dec(r["quantidade"])
+
+
+@app.route("/fornecedores")
+def fornecedores():
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM fornecedores ORDER BY razao_social LIMIT 500")
+        rows = cur.fetchall()
+    return render_template("fornecedores.html", fornecedores=rows)
+
+
+@app.route("/notas-fiscais")
+def notas_fiscais():
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT n.*, f.razao_social, f.cnpj,
+                   COALESCE((SELECT COUNT(*) FROM itens_nota_fiscal_entrada i WHERE i.nota_id=n.id),0) AS qtd_itens
+            FROM notas_fiscais_entrada n
+            LEFT JOIN fornecedores f ON f.id=n.fornecedor_id
+            ORDER BY n.criado_em DESC, n.id DESC
+            LIMIT 300
+        """)
+        rows = cur.fetchall()
+    return render_template("notas_fiscais.html", notas=rows)
+
+
+@app.route("/nota-fiscal/<int:nota_id>")
+def nota_fiscal_detalhe(nota_id):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT n.*, f.razao_social, f.cnpj, f.nome_fantasia
+            FROM notas_fiscais_entrada n
+            LEFT JOIN fornecedores f ON f.id=n.fornecedor_id
+            WHERE n.id=%s
+        """, (nota_id,))
+        nota = cur.fetchone()
+        cur.execute("""
+            SELECT i.*, p.codigo AS codigo_sistema, p.descricao AS descricao_sistema
+            FROM itens_nota_fiscal_entrada i
+            LEFT JOIN produtos p ON p.id=i.produto_id
+            WHERE i.nota_id=%s ORDER BY i.id
+        """, (nota_id,))
+        itens = cur.fetchall()
+    if not nota:
+        flash("Nota fiscal não encontrada.", "danger")
+        return redirect(url_for("notas_fiscais"))
+    return render_template("nota_fiscal_detalhe.html", nota=nota, itens=itens)
+
+
+@app.route("/importar-xml-nfe", methods=["GET", "POST"])
+def importar_xml_nfe():
+    resultado = None
+    if request.method == "POST":
+        f = request.files.get("arquivo")
+        if not f:
+            flash("Selecione um arquivo XML de NF-e.", "danger")
+            return redirect(url_for("importar_xml_nfe"))
+        try:
+            fornecedor, nota, itens = parse_nfe_xml(f)
+        except Exception as e:
+            flash(f"Erro ao ler XML: {e}", "danger")
+            return redirect(url_for("importar_xml_nfe"))
+        if not nota.get("chave_nfe"):
+            flash("Não consegui identificar a chave da NF-e no XML.", "danger")
+            return redirect(url_for("importar_xml_nfe"))
+        if not itens:
+            flash("XML lido, mas nenhum item de produto foi encontrado.", "danger")
+            return redirect(url_for("importar_xml_nfe"))
+
+        produtos_criados = 0
+        movimentos = 0
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM notas_fiscais_entrada WHERE chave_nfe=%s", (nota["chave_nfe"],))
+            existente = cur.fetchone()
+            if existente:
+                flash("Essa NF-e já foi importada. A entrada de estoque não foi duplicada.", "warning")
+                return redirect(url_for("nota_fiscal_detalhe", nota_id=existente["id"]))
+
+            cnpj = fornecedor.get("cnpj") or "SEM_CNPJ"
+            cur.execute("""
+                INSERT INTO fornecedores (cnpj, razao_social, nome_fantasia, ie, endereco, cidade, uf, telefone)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (cnpj) DO UPDATE SET
+                    razao_social=EXCLUDED.razao_social,
+                    nome_fantasia=EXCLUDED.nome_fantasia,
+                    ie=EXCLUDED.ie,
+                    endereco=EXCLUDED.endereco,
+                    cidade=EXCLUDED.cidade,
+                    uf=EXCLUDED.uf,
+                    telefone=EXCLUDED.telefone,
+                    atualizado_em=NOW()
+                RETURNING id
+            """, (cnpj, fornecedor.get("razao_social") or "Fornecedor sem nome", fornecedor.get("nome_fantasia") or "", fornecedor.get("ie") or "", fornecedor.get("endereco") or "", fornecedor.get("cidade") or "", fornecedor.get("uf") or "", fornecedor.get("telefone") or ""))
+            fornecedor_id = cur.fetchone()["id"]
+
+            cur.execute("""
+                INSERT INTO notas_fiscais_entrada (chave_nfe, numero_nf, serie_nf, data_emissao, fornecedor_id, valor_total, arquivo_xml_nome)
+                VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id
+            """, (nota["chave_nfe"], nota.get("numero_nf") or "", nota.get("serie_nf") or "", nota.get("data_emissao"), fornecedor_id, nota.get("valor_total") or 0, f.filename))
+            nota_id = cur.fetchone()["id"]
+
+            for item in itens:
+                produto_id, criado, saldo_anterior = localizar_ou_criar_produto_por_xml(cur, item)
+                if criado:
+                    produtos_criados += 1
+                qtd = dec(item.get("quantidade"), 0)
+                saldo_novo = saldo_anterior + qtd
+                cur.execute("UPDATE produtos SET quantidade=%s, ean=COALESCE(NULLIF(ean,''), %s), ncm=COALESCE(NULLIF(ncm,''), %s), atualizado_em=NOW() WHERE id=%s", (saldo_novo, item.get("ean") or "", item.get("ncm") or "", produto_id))
+                cur.execute("""
+                    INSERT INTO itens_nota_fiscal_entrada
+                    (nota_id, produto_id, codigo_produto_fornecedor, descricao, ncm, cfop, ean, quantidade, valor_unitario, valor_total)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (nota_id, produto_id, item.get("codigo") or "", item.get("descricao") or "", item.get("ncm") or "", item.get("cfop") or "", item.get("ean") or "", qtd, dec(item.get("valor_unitario"),0), dec(item.get("valor_total"),0)))
+                cur.execute("""
+                    INSERT INTO movimentacoes_estoque
+                    (produto_id, tipo, quantidade, saldo_anterior, saldo_novo, origem, referencia, observacao)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (produto_id, "entrada_nf", qtd, saldo_anterior, saldo_novo, "xml_nfe", nota.get("numero_nf") or nota["chave_nfe"], f"Entrada por XML NF-e {nota.get('numero_nf') or ''}"))
+                movimentos += 1
+            conn.commit()
+        resultado = {"nota_id": nota_id, "itens": len(itens), "produtos_criados": produtos_criados, "movimentos": movimentos, "fornecedor": fornecedor.get("razao_social"), "numero_nf": nota.get("numero_nf")}
+        flash("XML de NF-e importado com sucesso. Fornecedor, nota, itens e entrada de estoque foram registrados.", "success")
+    return render_template("importar_xml_nfe.html", resultado=resultado)
+
+
 @app.route("/backup")
 def backup():
     bio = BytesIO()
     with get_conn() as conn:
-        tabelas = ["produtos", "anuncios_ml", "composicao_anuncio", "vendas_ml", "movimentacoes_estoque"]
+        tabelas = ["produtos", "anuncios_ml", "composicao_anuncio", "vendas_ml", "movimentacoes_estoque", "fornecedores", "notas_fiscais_entrada", "itens_nota_fiscal_entrada"]
         with pd.ExcelWriter(bio, engine="xlsxwriter") as writer:
             for t in tabelas:
                 df = pd.read_sql(f"SELECT * FROM {t}", conn)
