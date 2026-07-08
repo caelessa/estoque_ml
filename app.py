@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 from io import BytesIO
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -59,8 +60,11 @@ def txt(v):
 
 def norm_col(c):
     s = str(c).strip().lower()
-    repl = str.maketrans("áàãâäéèêëíìîïóòõôöúùûüçº°#", "aaaaaeeeeiiiiooooouuuuc  ")
-    s = s.translate(repl)
+    # Remove acentos e símbolos de forma segura.
+    # Evita erro de str.maketrans quando a quantidade de caracteres não bate.
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("º", "").replace("°", "").replace("#", "")
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
     return s
 
