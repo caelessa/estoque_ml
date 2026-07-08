@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3">
+  <h4>Fornecedores</h4>
+  <div class="table-responsive">
+    <table class="table table-hover table-sm">
+      <thead><tr><th>Razão social</th><th>CNPJ</th><th>Fantasia</th><th>Cidade</th><th>UF</th><th>Telefone</th></tr></thead>
+      <tbody>
+        {% for f in fornecedores %}
+        <tr>
+          <td>{{ f.razao_social }}</td><td>{{ f.cnpj }}</td><td>{{ f.nome_fantasia }}</td><td>{{ f.cidade }}</td><td>{{ f.uf }}</td><td>{{ f.telefone }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-muted">Nenhum fornecedor cadastrado ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

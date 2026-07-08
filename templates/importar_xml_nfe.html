@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card p-4">
+      <h4 class="mb-3">Entrada de mercadoria por XML de NF-e</h4>
+      <p class="text-muted">Importe o XML da nota fiscal de compra. O sistema cadastra o fornecedor se ele ainda não existir, grava a nota, cadastra os itens e soma a quantidade no estoque.</p>
+      <form method="post" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label class="form-label">Arquivo XML da NF-e</label>
+          <input class="form-control" type="file" name="arquivo" accept=".xml" required>
+        </div>
+        <button class="btn btn-primary">Importar XML e dar entrada</button>
+      </form>
+      <hr>
+      <div class="alert alert-warning mb-0">
+        <strong>Atenção:</strong> se o produto não existir, ele será cadastrado automaticamente como pendente de revisão. A mesma chave NF-e não pode ser importada duas vezes.
+      </div>
+    </div>
+    {% if resultado %}
+    <div class="card p-4 mt-3">
+      <h5>Resultado da importação</h5>
+      <table class="table table-sm">
+        <tr><th>Fornecedor</th><td>{{ resultado.fornecedor }}</td></tr>
+        <tr><th>Número NF</th><td>{{ resultado.numero_nf }}</td></tr>
+        <tr><th>Itens importados</th><td>{{ resultado.itens }}</td></tr>
+        <tr><th>Produtos novos cadastrados</th><td>{{ resultado.produtos_criados }}</td></tr>
+        <tr><th>Movimentações de entrada</th><td>{{ resultado.movimentos }}</td></tr>
+      </table>
+      <a class="btn btn-outline-primary" href="{{ url_for('nota_fiscal_detalhe', nota_id=resultado.nota_id) }}">Ver nota importada</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

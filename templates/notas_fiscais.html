@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Notas fiscais de entrada</h4>
+  <a class="btn btn-primary" href="{{ url_for('importar_xml_nfe') }}">Importar XML</a>
+</div>
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm">
+      <thead><tr><th>NF</th><th>Série</th><th>Fornecedor</th><th>CNPJ</th><th>Emissão</th><th>Valor</th><th>Itens</th><th></th></tr></thead>
+      <tbody>
+        {% for n in notas %}
+        <tr>
+          <td>{{ n.numero_nf }}</td><td>{{ n.serie_nf }}</td><td>{{ n.razao_social }}</td><td>{{ n.cnpj }}</td>
+          <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '' }}</td>
+          <td>R$ {{ '%.2f'|format(n.valor_total|float) }}</td><td>{{ n.qtd_itens }}</td>
+          <td><a class="btn btn-sm btn-outline-primary" href="{{ url_for('nota_fiscal_detalhe', nota_id=n.id) }}">Ver</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="text-muted">Nenhuma nota importada ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
