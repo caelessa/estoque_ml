@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <h4>Itens pendentes de vínculo</h4>
+  <p class="text-muted mb-0">Aqui ficam os itens de XML cujo código do fornecedor ainda não está ligado a um produto interno. Ao vincular, o sistema salva o vínculo e registra a entrada no estoque.</p>
+</div>
+
+{% if not pendentes %}
+<div class="alert alert-success">Não há itens pendentes de vínculo.</div>
+{% endif %}
+
+{% for i in pendentes %}
+<div class="card p-3 mb-3">
+  <div class="row g-3">
+    <div class="col-md-5">
+      <h6 class="mb-1">{{ i.descricao }}</h6>
+      <div class="small-muted">Fornecedor: {{ i.razao_social }} - {{ i.cnpj }}</div>
+      <div class="small-muted">NF: {{ i.numero_nf }} | Cód. fornecedor: <strong>{{ i.codigo_produto_fornecedor }}</strong></div>
+      <div class="small-muted">EAN: {{ i.ean }} | NCM: {{ i.ncm }} | CFOP: {{ i.cfop }}</div>
+      <div class="mt-2"><span class="badge text-bg-warning">Pendente</span> Qtd: <strong>{{ i.quantidade }}</strong> | Vl. unit.: R$ {{ '%.2f'|format(i.valor_unitario|float) }}</div>
+    </div>
+    <div class="col-md-4">
+      <form method="post" action="{{ url_for('vincular_item_pendente', item_id=i.id) }}">
+        <label class="form-label small">Vincular a produto existente</label>
+        <select class="form-select form-select-sm mb-2" name="produto_id" required>
+          <option value="">Selecione...</option>
+          {% for p in produtos %}
+            <option value="{{ p.id }}">{{ p.codigo }} - {{ p.descricao }} (estoque {{ p.quantidade }})</option>
+          {% endfor %}
+        </select>
+        <button class="btn btn-sm btn-primary">Salvar vínculo e dar entrada</button>
+      </form>
+    </div>
+    <div class="col-md-3">
+      <form method="post" action="{{ url_for('cadastrar_produto_item_pendente', item_id=i.id) }}">
+        <label class="form-label small">Cadastrar como novo produto</label>
+        <input class="form-control form-control-sm mb-2" name="codigo_interno" placeholder="Código interno" value="{{ i.codigo_produto_fornecedor }}" required>
+        <input class="form-control form-control-sm mb-2" name="descricao_interna" placeholder="Descrição interna" value="{{ i.descricao }}" required>
+        <button class="btn btn-sm btn-success">Cadastrar, vincular e dar entrada</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4 mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4>Vínculos fornecedor x produto interno</h4>
+      <p class="text-muted mb-0">Esses vínculos ensinam o sistema que o código do fornecedor corresponde a um produto interno da Gutos Car.</p>
+    </div>
+  </div>
+  <form class="row g-2 mt-3">
+    <div class="col-md-5"><input class="form-control" name="busca" value="{{ busca }}" placeholder="Buscar fornecedor, código, descrição..."></div>
+    <div class="col-auto"><button class="btn btn-dark">Buscar</button></div>
+  </form>
+</div>
+<div class="card p-3">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover">
+      <thead><tr><th>Fornecedor</th><th>Cód. fornecedor</th><th>Descrição fornecedor</th><th>Produto interno</th><th>EAN</th><th>NCM</th></tr></thead>
+      <tbody>
+      {% for v in vinculos %}
+        <tr>
+          <td>{{ v.razao_social }}<br><span class="small-muted">{{ v.cnpj }}</span></td>
+          <td><strong>{{ v.codigo_produto_fornecedor }}</strong></td>
+          <td>{{ v.descricao_produto_fornecedor }}</td>
+          <td><strong>{{ v.codigo_interno }}</strong><br>{{ v.descricao_interna }}</td>
+          <td>{{ v.ean }}</td><td>{{ v.ncm }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

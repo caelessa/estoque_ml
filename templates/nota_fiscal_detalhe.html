@@ -10,6 +10,7 @@
     <div class="text-end">
       <div><strong>Emissão:</strong> {{ nota.data_emissao.strftime('%d/%m/%Y') if nota.data_emissao else '' }}</div>
       <div><strong>Valor:</strong> R$ {{ '%.2f'|format(nota.valor_total|float) }}</div>
+      <a class="btn btn-sm btn-warning mt-2" href="{{ url_for('pendentes_vinculo') }}">Ver pendências XML</a>
     </div>
   </div>
 </div>
@@ -17,11 +18,21 @@
   <h5>Itens da nota</h5>
   <div class="table-responsive">
     <table class="table table-sm table-hover">
-      <thead><tr><th>Cód. forn.</th><th>Descrição XML</th><th>Produto sistema</th><th>NCM</th><th>CFOP</th><th>EAN</th><th>Qtd</th><th>Vl. unit.</th><th>Total</th></tr></thead>
+      <thead><tr><th>Status</th><th>Cód. forn.</th><th>Descrição XML</th><th>Produto sistema</th><th>NCM</th><th>CFOP</th><th>EAN</th><th>Qtd</th><th>Vl. unit.</th><th>Total</th></tr></thead>
       <tbody>
       {% for i in itens %}
         <tr>
-          <td>{{ i.codigo_produto_fornecedor }}</td><td>{{ i.descricao }}</td><td>{{ i.codigo_sistema }} - {{ i.descricao_sistema }}</td>
+          <td>
+            {% if i.pendente_vinculo and not i.processado_estoque %}
+              <span class="badge text-bg-warning">Pendente vínculo</span>
+            {% elif i.processado_estoque %}
+              <span class="badge text-bg-success">Entrada feita</span>
+            {% else %}
+              <span class="badge text-bg-secondary">Não processado</span>
+            {% endif %}
+          </td>
+          <td>{{ i.codigo_produto_fornecedor }}</td><td>{{ i.descricao }}</td>
+          <td>{% if i.codigo_sistema %}<strong>{{ i.codigo_sistema }}</strong> - {{ i.descricao_sistema }}{% else %}<span class="text-danger">Sem produto vinculado</span>{% endif %}</td>
           <td>{{ i.ncm }}</td><td>{{ i.cfop }}</td><td>{{ i.ean }}</td>
           <td>{{ i.quantidade }}</td><td>R$ {{ '%.2f'|format(i.valor_unitario|float) }}</td><td>R$ {{ '%.2f'|format(i.valor_total|float) }}</td>
         </tr>
